@@ -1,5 +1,5 @@
 import { Component, ViewChild, AfterViewInit, ElementRef } from '@angular/core';
-import { timer, fromEvent, Subject, Observable } from 'rxjs';
+import { timer, fromEvent, Subject, Observable, Subscription } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
 
 @Component({
@@ -11,34 +11,38 @@ export class AppComponent implements AfterViewInit {
   @ViewChild('canvas')
   canvasRef: ElementRef<HTMLCanvasElement>;
 
-  private context2d: CanvasRenderingContext2D;
+  gameOver: boolean;
 
-  private cheeseFactory: CheeseFactory;
-  private cheese: Cheese;
-  private snake: Snake;
-  private positionContext: PositionContext;
+  private _context2d: CanvasRenderingContext2D;
 
-  private fps = 60;
-  private tps = 10;
+  private _cheeseFactory: CheeseFactory;
+  private _cheese: Cheese;
+  private _snake: Snake;
+  private _positionContext: PositionContext;
 
-  private directions: {
+  private _fps = 60;
+  private _tps = 10;
+
+  private _directions: {
     up: Direction,
     down: Direction,
     left: Direction,
     right: Direction
   };
 
-  ngAfterViewInit() {
-    this.context2d = this.canvasRef.nativeElement.getContext('2d');
+  private _subscriptions: Subscription[];
 
-    this.directions = {
+  ngAfterViewInit() {
+    this._context2d = this.canvasRef.nativeElement.getContext('2d');
+
+    this._directions = {
       up: new Direction(0,-1),
       down: new Direction(0,1),
       left: new Direction(-1,0),
       right: new Direction(1,0)
     };
 
-    this.positionContext = new PositionContext({
+    this._positionContext = new PositionContext({
       x: [0, 20],
       y: [0, 20]
     }, {
@@ -46,46 +50,64 @@ export class AppComponent implements AfterViewInit {
       y: [0, 480]
     });
 
-    this.cheeseFactory = new CheeseFactory(this.positionContext, [1,15]);
+    this._cheeseFactory = new CheeseFactory(this._positionContext, [1,15]);
 
-    const start = new Position(5, 5, this.positionContext);
+    this.initGame();
+  }
 
-    this.snake = new Snake(start, 4, this.directions.right);
+  restart() {
+    this.initGame();
+  }
 
-    this.cheese = this.cheeseFactory.createCheese(this.snake);
+  private initGame() {
+    const start = new Position(5, 5, this._positionContext);
+
+    this._snake = new Snake(start, 4, this._directions.right);
+
+    this._cheese = this._cheeseFactory.createCheese(this._snake);
      
-    timer(0, 1000/this.fps).subscribe(() => this.redraw());
+    const subFps = timer(0, 1000/this._fps).subscribe(() => this.redraw());
 
+    const subTps = timer(0, 1000/this._tps).pipe(
+      takeUntil(this._snake.died$)
+    ).subscribe(() => this.tick());
 
-    timer(0, 1000/this.tps).pipe(
-      takeUntil(this.snake.died$)
-    ).subscribe(() => this.tick())
+    const subEnd = this._snake.died$.subscribe(() => {
+      this._subscriptions.forEach(_ => _.unsubscribe());
+      this._subscriptions = null;
+      this.gameOver = true;
+      this.redraw(); //last redraw of end-state
+    });
 
-    fromEvent(window, 'keydown').subscribe((e: KeyboardEvent) => {
+    const subInput = fromEvent(window, 'keydown').subscribe((e: KeyboardEvent) => {
       this.handleUserInput(e);
     });
+
+    this.gameOver = false;
+
+    this._subscriptions = [subFps, subTps, subInput, subEnd];
   }
 
   private handleUserInput(e: KeyboardEvent) {
     const newDirection = this.getNewDirection(e.key);
-    if (newDirection && newDirection.isTurn(this.snake.direction)) {
-      this.snake.direction = newDirection;
+    if (newDirection && newDirection.isTurn(this._snake.direction)) {
+      this._snake.direction = newDirection;
     }
   }
 
   private getNewDirection(key: string) {
     switch (key) {
-      case 'ArrowLeft': return this.directions.left;
-      case 'ArrowRight': return this.directions.right;
-      case 'ArrowUp': return this.directions.up;
-      case 'ArrowDown': return this.directions.down;
+      case 'ArrowLeft': return this._directions.left;
+      case 'ArrowRight': return this._directions.right;
+      case 'ArrowUp': return this._directions.up;
+      case 'ArrowDown': return this._directions.down;
     }
   }
 
   private redraw() {
-    this.context2d.clearRect(this.positionContext.x.range[0], this.positionContext.y.range[0], this.positionContext.x.widths.range, this.positionContext.y.widths.range);
+    this._context2d.clearRect(this._positionContext.x.range[0], this._positionContext.y.range[0], this._positionContext.x.widths.range, this._positionContext.y.widths.range);
 
-    if (this.cheese) {
+    if (this._cheese) {
       this.drawCheese();
     }
     this.drawSnake();
@@ -94,48 +116,48 @@ export class AppComponent implements AfterViewInit {
   }
 
   private drawCheese() {
-    this.context2d.fillStyle = "darkgreen";
-    const [rx, ry] = this.positionContext.applyRange(this.cheese.position.x, this.cheese.position.y);
-    this.context2d.fillRect(rx, ry, this.positionContext.x.widths.cell, this.positionContext.y.widths.cell);
+    this._context2d.fillStyle = "darkgreen";
+    const [rx, ry] = this._positionContext.applyRange(this._cheese.position.x, this._cheese.position.y);
+    this._context2d.fillRect(rx, ry, this._positionContext.x.widths.cell, this._positionContext.y.widths.cell);
   }
 
   private drawBorder() {
-    this.context2d.strokeStyle = "black";
-    this.context2d.strokeRect(this.positionContext.x.range[0], this.positionContext.y.range[0], this.positionContext.x.widths.range, this.positionContext.y.widths.range);
+    this._context2d.strokeStyle = "black";
+    this._context2d.strokeRect(this._positionContext.x.range[0], this._positionContext.y.range[0], this._positionContext.x.widths.range, this._positionContext.y.widths.range);
   }
 
   private drawMap() {
-    this.context2d.strokeStyle = "black";    
-    for (let x=this.positionContext.x.domain[0]; x<this.positionContext.x.domain[1]; x++) {
-      for (let y=this.positionContext.y.domain[0]; y<this.positionContext.y.domain[1]; y++) {
-        const [rx,ry] = this.positionContext.applyRange(x,y);
-        this.context2d.strokeRect(rx,ry,this.positionContext.x.widths.cell, this.positionContext.y.widths.cell);
+    this._context2d.strokeStyle = "black";    
+    for (let x=this._positionContext.x.domain[0]; x<this._positionContext.x.domain[1]; x++) {
+      for (let y=this._positionContext.y.domain[0]; y<this._positionContext.y.domain[1]; y++) {
+        const [rx,ry] = this._positionContext.applyRange(x,y);
+        this._context2d.strokeRect(rx,ry,this._positionContext.x.widths.cell, this._positionContext.y.widths.cell);
       }
     }
   }
 
   private drawSnake() {
-    this.context2d.fillStyle = "darkgrey";
-    for (let seg of this.snake.segments) {
-      const [rx,ry] = this.positionContext.applyRange(seg.x,seg.y);
-      this.context2d.fillRect(rx,ry,this.positionContext.x.widths.cell, this.positionContext.y.widths.cell);
+    this._context2d.fillStyle = "darkgrey";
+    for (let seg of this._snake.segments) {
+      const [rx,ry] = this._positionContext.applyRange(seg.x,seg.y);
+      this._context2d.fillRect(rx,ry,this._positionContext.x.widths.cell, this._positionContext.y.widths.cell);
     }
 
-    this.context2d.fillStyle = this.snake.dead ? "red" : "gray";
-    const [rx,ry] = this.positionContext.applyRange(this.snake.head.x,this.snake.head.y);
-    this.context2d.fillRect(rx,ry,this.positionContext.x.widths.cell, this.positionContext.y.widths.cell);
+    this._context2d.fillStyle = this._snake.dead ? "red" : "gray";
+    const [rx,ry] = this._positionContext.applyRange(this._snake.head.x,this._snake.head.y);
+    this._context2d.fillRect(rx,ry,this._positionContext.x.widths.cell, this._positionContext.y.widths.cell);
   }
 
   private tick() {
-    this.snake.tick();
+    this._snake.tick();
     
-    if (this.snake.segments.some(_ => _ !== this.snake.head && _.equals(this.snake.head))) {
-      this.snake.kill();
+    if (this._snake.segments.some(_ => _ !== this._snake.head && _.equals(this._snake.head))) {
+      this._snake.kill();
     }
 
-    if (this.cheese.position.equals(this.snake.head)) {
-      this.snake.food += this.cheese.food;
-      this.cheese = this.cheeseFactory.createCheese(this.snake);
+    if (this._cheese.position.equals(this._snake.head)) {
+      this._snake.eat(this._cheese);
+      this._cheese = this._cheeseFactory.createCheese(this._snake);
     }
   }
 }
@@ -151,20 +173,25 @@ class Snake {
   private _died$: Subject<any>;
   get died$() { return this._died$.asObservable(); }
 
-  segments: Position[];
-  get head() { return this.segments[0]; }
+  private _segments: Position[];
+  get segments() { return this._segments; }
+  get head() { return this._segments[0]; }
 
-  food: number;
+  private _food: number;
   
   private _dead: boolean;
   get dead() { return this._dead; }
 
   constructor(start: Position, initialFood: number, initialDirection: Direction) {
     this._direction = initialDirection;
-    this.segments = [start];
-    this.food = initialFood;
+    this._segments = [start];
+    this._food = initialFood;
     this._dead = false;
     this._died$ = new Subject<any>();
+  }
+
+  eat(cheese: Cheese) {
+    this._food += cheese.food;
   }
 
   kill() {
@@ -179,47 +206,38 @@ class Snake {
     }
 
     const newhead = this._direction.applyTo(this.head);
-    this.segments.unshift(newhead);
+    this._segments.unshift(newhead);
 
-    if (this.food > 0) {
-      this.food--;
+    if (this._food > 0) {
+      this._food--;
     }
     else {
-      this.segments.pop();
+      this._segments.pop();
     }
   }
 }
 
 class Cheese {
-  position: Position;
-  food: number;
+  get position() { return this._position; }
+  get food() { return this._food; }
 
-  constructor(position: Position, food: number) {
-    this.position = position;
-    this.food = food;
-  }
+  constructor(private _position: Position, private _food: number) {  }
 }
 
 class CheeseFactory {
-  private positionContext: PositionContext;
-  private food: [number, number];
-
-  constructor(positionContext: PositionContext, food: [number, number]) {
-    this.positionContext = positionContext;
-    this.food = food;
-  }
+  constructor(private _positionContext: PositionContext, private _food: [number, number]) {  }
 
   createCheese(snake: Snake) {
     const position = this.generatePosition(snake);    
-    const food = Math.floor(Math.random()*(this.food[1] - this.food[0])) + this.food[0];
+    const food = Math.floor(Math.random()*(this._food[1] - this._food[0])) + this._food[0];
 
     return new Cheese(position, food);
   }
 
   private generatePosition(snake: Snake) {
     const possible: [number,number][] = [];
-    for (let x = this.positionContext.x.domain[0]; x < this.positionContext.x.domain[1]; x++) {
-      for (let y = this.positionContext.y.domain[0]; y < this.positionContext.y.domain[1]; y++) {
+    for (let x = this._positionContext.x.domain[0]; x < this._positionContext.x.domain[1]; x++) {
+      for (let y = this._positionContext.y.domain[0]; y < this._positionContext.y.domain[1]; y++) {
         const pos: [number, number] = [x,y];
         if (snake.segments.every(_ => !_.equals(pos))) {
           possible.push(pos);
@@ -228,37 +246,33 @@ class CheeseFactory {
     }
 
     let choice = Math.floor(Math.random()*possible.length);
-    const pos = new Position(possible[choice][0],possible[choice][1], this.positionContext);
+    const pos = new Position(possible[choice][0],possible[choice][1], this._positionContext);
 
     return pos;
   }
 }
 
 class Position {
-  x: number;
-  y: number;
+  get x() { return this._x; }
+  get y() { return this._y; }
 
-  private context: PositionContext;
-
-  constructor(x: number, y: number, context: PositionContext) {
-    this.context = context;
-    
-    [x,y] = this.context.applyDomain(x, y);
-    this.x = x;
-    this.y = y;
+  constructor(private _x: number, private _y: number, private _context: PositionContext) {    
+    const [x,y] = this._context.applyDomain(_x, _y);
+    this._x = x;
+    this._y = y;
   }
 
   createModified(dx: number, dy: number) {
     let x = this.x + dx;
     let y = this.y + dy;    
 
-    return new Position(x,y,this.context);
+    return new Position(x,y,this._context);
   }
 
   getIndex() {
-    const x = this.x - this.context.x.domain[0];
-    const y = this.y - this.context.y.domain[0];
-    return x + this.context.x.widths.domain * y;
+    const x = this.x - this._context.x.domain[0];
+    const y = this.y - this._context.y.domain[0];
+    return x + this._context.x.widths.domain * y;
   }
 
   equals(other: Position | [number, number]) {
@@ -287,19 +301,25 @@ interface AxisPositionContext {
 };
 
 class PositionContext {
-  x: AxisPositionContext;
-  y: AxisPositionContext;
+  private _x: AxisPositionContext;
+  private _y: AxisPositionContext;
+
+  get x() { return this._x; }
+  get y() { return this._y; }
   
   constructor(domain: Interval2D, range: Interval2D) {
-    this.x = {
+    const xWidths = this.getWidths(domain.x, range.x);
+    this._x = {
       domain: domain.x,
       range: range.x,
-      widths: this.getWidths(domain.x, range.x)
+      get widths() { return xWidths; }
     };
-    this.y = {
+
+    const yWidths = this.getWidths(domain.y, range.y);
+    this._y = {
       domain: domain.y,
       range: range.y,
-      widths: this.getWidths(domain.y, range.y)
+      get widths() { return yWidths; }
     };
   }
 
@@ -349,19 +369,13 @@ interface Interval2D {
 }
 
 class Direction {
-  x: number;
-  y: number;
-
-  constructor(x: number, y: number) {
-    this.x = x;
-    this.y = y;
-  }
+  constructor(private _dx: number, private _dy: number) { }
 
   applyTo(position: Position) {
-    return position.createModified(this.x, this.y);
+    return position.createModified(this._dx, this._dy);
   }
 
   isTurn(previous: Direction) {
-    return !(this.x == previous.x || this.x == -previous.x) && !(this.y == previous.y || this.y == -previous.y);
+    return !(this._dx == previous._dx || this._dx == -previous._dx) && !(this._dy == previous._dy || this._dy == -previous._dy);
   }
 }
