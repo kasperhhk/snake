@@ -22,6 +22,7 @@ export class AppComponent implements AfterViewInit {
 
   private _fps = 60;
   private _tps = 10;
+  private _tpsSub: Subscription;
 
   private _directions: {
     up: Direction,
@@ -50,7 +51,7 @@ export class AppComponent implements AfterViewInit {
       y: [0, 480]
     });
 
-    this._cheeseFactory = new CheeseFactory(this._positionContext, [1,15]);
+    this._cheeseFactory = new CheeseFactory(this._positionContext, [3,5], 1);
 
     this.initGame();
   }
@@ -60,20 +61,21 @@ export class AppComponent implements AfterViewInit {
   }
 
   private initGame() {
+    this._tps = 10;
+
     const start = new Position(5, 5, this._positionContext);
 
-    this._snake = new Snake(start, 4, this._directions.right);
+    this._snake = new Snake(start, 30, this._directions.right, () => this.increaseTps(1));
 
     this._cheese = this._cheeseFactory.createCheese(this._snake);
      
     const subFps = timer(0, 1000/this._fps).subscribe(() => this.redraw());
 
-    const subTps = timer(0, 1000/this._tps).pipe(
-      takeUntil(this._snake.died$)
-    ).subscribe(() => this.tick());
+    this._tpsSub = this.createTps();
 
     const subEnd = this._snake.died$.subscribe(() => {
       this._subscriptions.forEach(_ => _.unsubscribe());
+      this._tpsSub.unsubscribe();
       this._subscriptions = null;
       this.gameOver = true;
       this.redraw(); //last redraw of end-state
@@ -85,7 +87,19 @@ export class AppComponent implements AfterViewInit {
 
     this.gameOver = false;
 
-    this._subscriptions = [subFps, subTps, subInput, subEnd];
+    this._subscriptions = [subFps, subInput, subEnd];
+  }
+
+  private increaseTps(by: number) {
+    this._tps += by;
+    this._tpsSub.unsubscribe();
+    this._tpsSub = this.createTps();
+  }
+
+  private createTps() {
+    return timer(0, 1000/this._tps).pipe(
+      takeUntil(this._snake.died$)
+    ).subscribe(() => this.tick());
   }
 
   private handleUserInput(e: KeyboardEvent) {
@@ -116,7 +130,7 @@ export class AppComponent implements AfterViewInit {
   }
 
   private drawCheese() {
-    this._context2d.fillStyle = "darkgreen";
+    this._context2d.fillStyle = this._cheese.red ? "darkred" : "darkgreen";
     const [rx, ry] = this._positionContext.applyRange(this._cheese.position.x, this._cheese.position.y);
     this._context2d.fillRect(rx, ry, this._positionContext.x.widths.cell, this._positionContext.y.widths.cell);
   }
@@ -182,7 +196,7 @@ class Snake {
   private _dead: boolean;
   get dead() { return this._dead; }
 
-  constructor(start: Position, initialFood: number, initialDirection: Direction) {
+  constructor(start: Position, initialFood: number, initialDirection: Direction, private _redCheeseEffect: () => void) {
     this._direction = initialDirection;
     this._segments = [start];
     this._food = initialFood;
@@ -191,6 +205,9 @@ class Snake {
   }
 
   eat(cheese: Cheese) {
+    if (cheese.red) {
+      this._redCheeseEffect();
+    }
     this._food += cheese.food;
   }
 
@@ -220,18 +237,23 @@ class Snake {
 class Cheese {
   get position() { return this._position; }
   get food() { return this._food; }
+  get red() { return this._red; }
 
-  constructor(private _position: Position, private _food: number) {  }
+  constructor(private _position: Position, private _food: number, private _red: boolean) {  }
 }
 
 class CheeseFactory {
-  constructor(private _positionContext: PositionContext, private _food: [number, number]) {  }
+  constructor(private _positionContext: PositionContext, private _food: [number, number], private _redChance: number) {  }
 
   createCheese(snake: Snake) {
-    const position = this.generatePosition(snake);    
-    const food = Math.floor(Math.random()*(this._food[1] - this._food[0])) + this._food[0];
-
-    return new Cheese(position, food);
+    const position = this.generatePosition(snake);
+    if (Math.random() < this._redChance) {
+      return new Cheese(position, 0, true);
+    }
+    else {
+      const food = Math.floor(Math.random()*(this._food[1] - this._food[0])) + this._food[0];      
+      return new Cheese(position, food, false);
+    }
   }
 
   private generatePosition(snake: Snake) {
